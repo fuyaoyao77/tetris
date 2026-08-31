@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>俄罗斯方块 Tetris</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+    color: #fff;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+  }
+  .game-wrap { display: flex; gap: 20px; align-items: flex-start; padding: 20px; }
+  .side-panel {
+    width: 140px; display: flex; flex-direction: column; gap: 16px;
+  }
+  .panel-box {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px; padding: 12px; text-align: center;
+  }
+  .panel-box h3 { font-size: 12px; opacity: 0.7; letter-spacing: 2px; margin-bottom: 6px; }
+  .panel-box .value { font-size: 24px; font-weight: 700; }
+  #next-canvas { display: block; margin: 0 auto; }
+  #board-canvas {
+    background: rgba(0,0,0,0.35);
+    border: 2px solid rgba(255,255,255,0.25);
+    border-radius: 10px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  .controls { font-size: 12px; opacity: 0.75; line-height: 1.8; }
+  .controls b { color: #ffd54f; }
+  .overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px;
+    background: rgba(0,0,0,0.6); border-radius: 10px;
+  }
+  .overlay.hidden { display: none; }
+  .overlay h2 { font-size: 28px; letter-spacing: 4px; }
+  button {
+    cursor: pointer; border: none; border-radius: 8px; padding: 10px 24px;
+    font-size: 15px; font-weight: 600; color: #1a1a2e;
+    background: linear-gradient(135deg, #ffd54f, #ff8a65);
+    transition: transform .1s;
+  }
+  button:hover { transform: translateY(-2px); }
+  .board-wrap { position: relative; }
+  .hint { font-size: 11px; opacity: 0.5; margin-top: 8px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="game-wrap">
+  <div class="side-panel">
+    <div class="panel-box"><h3>得分</h3><div class="value" id="score">0</div></div>
+    <div class="panel-box"><h3>等级</h3><div class="value" id="level">1</div></div>
+    <div class="panel-box"><h3>消行</h3><div class="value" id="lines">0</div></div>
+    <div class="panel-box"><h3>下一个</h3><canvas id="next-canvas" width="96" height="96"></canvas></div>
+  </div>
+  <div class="board-wrap">
+    <canvas id="board-canvas" width="300" height="600"></canvas>
+    <div class="overlay hidden" id="overlay">
+      <h2 id="overlay-title">俄罗斯方块</h2>
+      <p id="overlay-msg">经典小游戏 · 键盘控制</p>
+      <button id="btn-start">开始游戏</button>
+    </div>
+  </div>
+  <div class="side-panel">
+    <div class="panel-box controls">
+      <h3>操作</h3>
+      <span><b>←/→</b> 移动</span><br/>
+      <span><b>↑</b> 旋转</span><br/>
+      <span><b>↓</b> 加速下落</span><br/>
+      <span><b>空格</b> 硬降</span><br/>
+      <span><b>P</b> 暂停</span>
+    </div>
+    <div class="hint">点「开始游戏」或按 Enter</div>
+  </div>
+</div>
+
+<script src="src/tetris.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const CELL = 30;
+  const ctx = document.getElementById('board-canvas').getContext('2d');
+  const nctx = document.getElementById('next-canvas').getContext('2d');
+  const elScore = document.getElementById('score');
+  const elLevel = document.getElementById('level');
+  const elLines = document.getElementById('lines');
+  const overlay = document.getElementById('overlay');
+  const overlayTitle = document.getElementById('overlay-title');
+  const overlayMsg = document.getElementById('overlay-msg');
+  const btnStart = document.getElementById('btn-start');
+
+  let board, current, bag, nextType;
+  let score = 0, level = 1, lines = 0;
+  let running = false, paused = false, gameOver = false;
+  let dropTimer = null;
+
+  /** 根据等级返回下落间隔（毫秒） */
+  function dropInterval(lv) {
+    return Math.max(80, 800 - (lv - 1) * 70);
+  }
+
+  function drawCell(context, x, y, size, color, isGhost) {
+    context.fillStyle = color;
+    context.fillRect(x, y, size, size);
+    context.strokeStyle = 'rgba(0,0,0,0.25)';
+    context.lineWidth = 1;
+    context.strokeRect(x, y, size, size);
+    if (isGhost) {
+      context.fillStyle = 'rgba(255,255,255,0.15)';
+      context.fillRect(x + 3, y + 3, size - 6, size - 6);
+    }
+  }
+
+  /** 绘制下一块预览 */
+  function drawNext() {
+    nctx.clearRect(0, 0, 96, 96);
+    if (!nextType) return;
+    const m = Tetris.getRotations(nextType)[0];
+    const size = 24;
+    const ox = (96 - m[0].length * size) / 2;
+    const oy = (96 - m.length * size) / 2;
+    for (let r = 0; r < m.length; r++) {
+      for (let c = 0; c < m[r].length; c++) {
+        if (m[r][c]) drawCell(nctx, ox + c * size, oy + r * size, size, Tetris.COLORS[nextType]);
+      }
+    }
+  }
+
+  /** 绘制主游戏板 */
+  function draw() {
+    ctx.clearRect(0, 0, 300, 600);
+    // 已固定方块
+    for (let r = 0; r < Tetris.ROWS; r++) {
+      for (let c = 0; c < Tetris.COLS; c++) {
+        if (board[r][c]) {
+          drawCell(ctx, c * CELL, r * CELL, CELL, Tetris.COLORS[board[r][c]]);
+        } else {
+          ctx.fillStyle = 'rgba(255,255,255,0.03)';
+          ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
+        }
+      }
+    }
+    if (!current) return;
+    // 影子（硬降预览）
+    let ghost = { type: current.type, rotation: current.rotation, row: current.row, col: current.col };
+    while (Tetris.canDrop(board, ghost)) {
+      ghost = Tetris.move(board, ghost, 1, 0);
+    }
+    const m = Tetris.getMatrix(current);
+    for (let r = 0; r < m.length; r++) {
+      for (let c = 0; c < m[r].length; c++) {
+        if (!m[r][c]) continue;
+        const gr = ghost.row + r;
+        const gc = ghost.col + c;
+        if (gr >= 0 && gc >= 0 && gc < Tetris.COLS && gr < Tetris.ROWS) {
+          drawCell(ctx, gc * CELL, gr * CELL, CELL, Tetris.COLORS[current.type], true);
+        }
+      }
+    }
+    // 当前方块
+    for (let r = 0; r < m.length; r++) {
+      for (let c = 0; c < m[r].length; c++) {
+        if (!m[r][c]) continue;
+        const br = current.row + r;
+        const bc = current.col + c;
+        if (br >= 0 && bc >= 0 && bc < Tetris.COLS) {
+          drawCell(ctx, bc * CELL, br * CELL, CELL, Tetris.COLORS[current.type]);
+        }
+      }
+    }
+  }
+
+  /** 生成新方块并检查游戏结束 */
+  function spawnNew() {
+    current = Tetris.spawnPiece(nextType);
+    const n = Tetris.nextFromBag(bag);
+    nextType = n.type;
+    bag = n.bag;
+    drawNext();
+    if (Tetris.isGameOver(board, current)) {
+      endGame();
+      return;
+    }
+    draw();
+  }
+
+  function addScore(cleared) {
+    if (!cleared) return;
+    const s = Tetris.scoreFor(cleared, level);
+    score += s;
+    lines += cleared;
+    level = Math.floor(lines / 10) + 1;
+    elScore.textContent = score;
+    elLevel.textContent = level;
+    elLines.textContent = lines;
+    scheduleDrop();
+  }
+
+  function scheduleDrop() {
+    if (dropTimer) clearTimeout(dropTimer);
+    dropTimer = setTimeout(function () {
+      if (!running || paused || gameOver) return;
+      stepDown();
+    }, dropInterval(level));
+  }
+
+  function stepDown() {
+    const moved = Tetris.move(board, current, 1, 0);
+    if (moved) {
+      current = moved;
+      draw();
+      scheduleDrop();
+    } else {
+      const cleared = Tetris.lockPiece(board, current);
+      addScore(cleared);
+      spawnNew();
+    }
+  }
+
+  function hardDrop() {
+    let ghost = current;
+    while (Tetris.canDrop(board, ghost)) {
+      ghost = Tetris.move(board, ghost, 1, 0);
+    }
+    current = ghost;
+    const cleared = Tetris.lockPiece(board, current);
+    addScore(cleared);
+    spawnNew();
+  }
+
+  function endGame() {
+    gameOver = true;
+    running = false;
+    if (dropTimer) clearTimeout(dropTimer);
+    overlayTitle.textContent = '游戏结束';
+    overlayMsg.textContent = '得分 ' + score + ' · 消行 ' + lines;
+    btnStart.textContent = '再来一局';
+    overlay.classList.remove('hidden');
+    draw();
+  }
+
+  function startGame() {
+    board = Tetris.createBoard();
+    bag = [];
+    score = 0; level = 1; lines = 0;
+    gameOver = false; paused = false; running = true;
+    elScore.textContent = '0';
+    elLevel.textContent = '1';
+    elLines.textContent = '0';
+    const first = Tetris.nextFromBag(bag);
+    nextType = first.type;
+    bag = first.bag;
+    overlay.classList.add('hidden');
+    spawnNew();
+    scheduleDrop();
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (!running || gameOver) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startGame(); }
+      return;
+    }
+    if (e.key === 'p' || e.key === 'P') {
+      paused = !paused;
+      if (paused) { if (dropTimer) clearTimeout(dropTimer); }
+      else scheduleDrop();
+      return;
+    }
+    if (paused) return;
+    const handlers = {
+      'ArrowLeft': function () { const m = Tetris.move(board, current, 0, -1); if (m) { current = m; draw(); } },
+      'ArrowRight': function () { const m = Tetris.move(board, current, 0, 1); if (m) { current = m; draw(); } },
+      'ArrowUp': function () { const r = Tetris.rotate(board, current, 1); if (r) { current = r; draw(); } },
+      'ArrowDown': function () { stepDown(); },
+      ' ': function () { e.preventDefault(); hardDrop(); }
+    };
+    if (handlers[e.key]) handlers[e.key]();
+  });
+
+  btnStart.addEventListener('click', startGame);
+  draw();
+})();
+</script>
+</body>
+</html>

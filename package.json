@@ -1,0 +1,16 @@
+{
+  "name": "tetris",
+  "version": "1.0.0",
+  "description": "经典俄罗斯方块（Tetris）—— 纯 JS + Canvas 实现，含单元测试与 CI",
+  "main": "src/tetris.js",
+  "scripts": {
+    "test": "node --test",
+    "lint": "eslint src/ test/",
+    "check": "node --check src/tetris.js && npm run lint && npm test"
+  },
+  "keywords": ["tetris", "game", "javascript", "canvas"],
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^9.0.0"
+  }
+}
